@@ -62,12 +62,23 @@ let split (str: string) = str.Split([|';'|], StringSplitOptions.RemoveEmptyEntri
     Model Types
 **********************************************************************************************************************)
 
+type Path = private Path of string
+
+module Path =
+    let validate path = if Directory.Exists path then Success (Path path) else Failure $"Directory doesn't exist {path}"
+    
+    let create path = path |> trim |> validate
+    
+    let value (Path path) = path
+
 type Paths = private Paths of string[]
     
 module Paths =
-    let validate path = if Directory.Exists path then Success path else Failure $"Directory doesn't exist {path}" 
+    let create paths = paths |> Array.map Path.create
     
-    let create paths = paths |> Array.map trim |> Array.map validate
+    let create_from_path (Path path) = Paths [|path|] 
+    
+    let value (Paths paths) = paths
         
 type Strings = private Strings of string[]
 
@@ -75,24 +86,34 @@ module Strings =
     let validate str = if String.IsNullOrEmpty str then Failure "String is null or empty" else Success str
     
     let create strings = strings |> Array.map trim |> Array.map validate
+    
+    let value (Strings strings) = strings
         
 (*********************************************************************************************************************  
     Search options
 **********************************************************************************************************************)
 
 [<Flags>]
-type SearchMode =
+type SearchOptions =
     | None = 0
     | CaseSensitive = 1
     | WholeWords = 2
     | RegExp = 4
 
-type SearchOptions = {
+type SearchParams = {
     Paths: Paths
-    // Patters: Patters
+    Patters: Strings
     Word: string
-    ExcludedDirs: string[]
-    ExcludedPathWords: string[]
-    SearchMode: SearchMode
+    ExcludedDirs: Strings
+    // ExcludedPathWords: Strings
+    SearchOptions: SearchOptions
 }
+
+type SearchMessage =
+    | Search of SearchParams
+    | Quit
+
+type Match = {Path: string; Value: string; Index: int}
+    
+type Matches = seq<Match> 
 

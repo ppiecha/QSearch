@@ -2,8 +2,9 @@
 
 open System.IO
 open System.Text.RegularExpressions
+open QSearch.Types
+open Types
 
-let add x y = x + y
 
 let rec getAllFiles dir pattern =
     seq { yield! Directory.EnumerateFiles(dir, pattern)
@@ -11,15 +12,6 @@ let rec getAllFiles dir pattern =
               yield! getAllFiles d pattern }
     
     
-let rec getAllFilesByPatternList (paths: string[]) (patterns: string[]) = seq {
-    for path in paths do
-        for pattern in patterns do
-            yield! Directory.EnumerateFiles(path, pattern)
-        for d in Directory.EnumerateDirectories(path) do
-            yield! getAllFilesByPatternList [|d|] patterns
-}    
-    
-
 let rec getAllDirs dir =
     seq { for d in Directory.EnumerateDirectories(dir) do
               yield d
@@ -46,14 +38,62 @@ let readFile (path:string) = async {
   return! sr.ReadToEndAsync() |> Async.AwaitTask
 }
 
-type Match = {Path: string; Value: string; Index: int}
 
-let findMatchesInFile text ignoreCase wholeWords (path:string) = async {
-    let! content = readFile path
-    let pattern = if wholeWords then text else @"\b" + text + @"\b"
-    let options = RegexOptions.Compiled
-    let options = if ignoreCase then options + RegexOptions.IgnoreCase else options
-    let rx = Regex(pattern, options)
-    return rx.Matches(content) |> Seq.map (fun m -> {Path = path; Value = m.Value; Index = m.Index})   
+(*********************************************************************************************************************  
+    Main search functions
+**********************************************************************************************************************)
+
+let rec getAllFilesByPatternList (paths: string[]) (patterns: string[]) (excludedDirs: string[]) = seq {
+    for path in paths do
+        for pattern in patterns do
+            yield! Directory.EnumerateFiles(path, pattern)
+        for dir in Directory.EnumerateDirectories(path) do
+            if excludedDirs |> Array.contains dir |> not then
+                yield! getAllFilesByPatternList [|dir|] patterns excludedDirs
+}   
+
+
+let findMatchesInFile word (searchOptions: SearchOptions) (fileName:string) = async {
+    let! content = readFile fileName
+    let pattern = if searchOptions.HasFlag SearchOptions.WholeWords then @"\b" + word + @"\b" else word
+    let regexOptions = RegexOptions.Compiled
+    let ignoreCase = not (searchOptions.HasFlag SearchOptions.CaseSensitive)
+    let regexOptions = if ignoreCase then regexOptions ||| RegexOptions.IgnoreCase else regexOptions
+    let rx = Regex(pattern, regexOptions)
+    return rx.Matches(content) |> Seq.map (fun m -> {Path = fileName; Value = m.Value; Index = m.Index})   
 }
+
+
+let planAllMatches (searchParams: SearchParams) =
+    let paths = Paths.value searchParams.Paths
+    let patterns = Strings.value searchParams.Patters
+    let excludedDirs = Strings.value searchParams.ExcludedDirs
+    getAllFilesByPatternList paths patterns excludedDirs
+    |> Seq.map (findMatchesInFile searchParams.Word searchParams.SearchOptions)
+    |> Async.Parallel
+    
+
+let searchEvent = Event<Matches>()
+let searchFinished = searchEvent.Publish
+
+(*********************************************************************************************************************  
+    Search processor
+**********************************************************************************************************************)
+
+let searcher =
+    MailboxProcessor.Start(fun inbox ->
+        let rec loop () = async {
+            let! message = inbox.Receive()
+            match message with
+            | Search searchParams ->
+                let all_matches = 
+                    searchParams
+                    |> planAllMatches
+                    |> Async.RunSynchronously
+                    |> Seq.collect id
+                searchEvent.Trigger all_matches
+                do! loop ()
+            | Quit -> return ()
+        }
+        loop ())
 

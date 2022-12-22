@@ -10,10 +10,10 @@
 
     <ItemGroup>
         <Compile Include="Types.fs" />
+        <Compile Include="Search.fs" />
         <Compile Include="EtoUtils.fs" />
         <Compile Include="Gui.fs" />
         <Compile Include="MainForm.fs" />
-        <Compile Include="Search.fs" />
 
     </ItemGroup>
 </Project>
