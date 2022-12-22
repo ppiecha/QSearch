@@ -3,10 +3,21 @@
 open System.IO
 open System.Text.RegularExpressions
 
+let add x y = x + y
+
 let rec getAllFiles dir pattern =
     seq { yield! Directory.EnumerateFiles(dir, pattern)
           for d in Directory.EnumerateDirectories(dir) do
               yield! getAllFiles d pattern }
+    
+    
+let rec getAllFilesByPatternList (paths: string[]) (patterns: string[]) = seq {
+    for path in paths do
+        for pattern in patterns do
+            yield! Directory.EnumerateFiles(path, pattern)
+        for d in Directory.EnumerateDirectories(path) do
+            yield! getAllFilesByPatternList [|d|] patterns
+}    
     
 
 let rec getAllDirs dir =
