@@ -23,7 +23,7 @@ and Table = Tbl of TRow list
 let rec makeLayout (Tbl t) =
   let ret = new TableLayout()
 
-  for r in t  do
+  for r in t do
     let makeTd (tds:TCell list) =
       let row = new TableRow()
       for td in tds do

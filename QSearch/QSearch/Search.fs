@@ -1,9 +1,10 @@
 ﻿module QSearch.Search
 
+open System
 open System.IO
 open System.Text.RegularExpressions
 open QSearch.Types
-open Types
+open System.Threading
 
 
 let rec getAllFiles dir pattern =
@@ -53,27 +54,37 @@ let rec getAllFilesByPatternList (paths: string[]) (patterns: string[]) (exclude
 }   
 
 
-let findMatchesInFile word (searchOptions: SearchOptions) (fileName:string) = async {
-    let! content = readFile fileName
+let findMatchesInFile word (searchOptions: SearchOptions) (fileContent:string) = 
     let pattern = if searchOptions.HasFlag SearchOptions.WholeWords then @"\b" + word + @"\b" else word
     let regexOptions = RegexOptions.Compiled
     let ignoreCase = not (searchOptions.HasFlag SearchOptions.CaseSensitive)
     let regexOptions = if ignoreCase then regexOptions ||| RegexOptions.IgnoreCase else regexOptions
     let rx = Regex(pattern, regexOptions)
-    return rx.Matches(content) |> Seq.map (fun m -> {Path = fileName; Value = m.Value; Index = m.Index})   
+    rx.Matches(fileContent) |> Seq.map (fun m -> {Value = m.Value; Index = m.Index})   
+
+
+let planFileMatches searchParams fileName = async {
+    let! fileContent = readFile fileName
+    let matches = 
+        match String.IsNullOrEmpty searchParams.Word with
+        | false -> findMatchesInFile searchParams.Word searchParams.SearchOptions fileContent
+        | true -> Seq.empty
+    let fileContent = FileContent.create fileContent
+    return FileSearchResult.create &fileContent {FileName=fileName; Matches=matches} 
+    // return {FileName=fileName; Matches=matches}
 }
 
 
-let planAllMatches (searchParams: SearchParams) =
+let planAllFilesMatches (searchParams: SearchParams) =
     let paths = Paths.value searchParams.Paths
-    let patterns = Strings.value searchParams.Patters
+    let patterns = Strings.value searchParams.Patterns
     let excludedDirs = Strings.value searchParams.ExcludedDirs
     getAllFilesByPatternList paths patterns excludedDirs
-    |> Seq.map (findMatchesInFile searchParams.Word searchParams.SearchOptions)
+    |> Seq.map (fun fileName -> planFileMatches searchParams fileName |> Async.Catch) 
     |> Async.Parallel
     
 
-let searchEvent = Event<Matches>()
+let searchEvent = Event<Choice<FileSearchResult, exn>[]>()
 let searchFinished = searchEvent.Publish
 
 (*********************************************************************************************************************  
@@ -81,19 +92,20 @@ let searchFinished = searchEvent.Publish
 **********************************************************************************************************************)
 
 let searcher =
-    MailboxProcessor.Start(fun inbox ->
+    MailboxProcessor<SearchMessage>.Start(fun inbox ->
         let rec loop () = async {
-            let! message = inbox.Receive()
-            match message with
-            | Search searchParams ->
-                let all_matches = 
-                    searchParams
-                    |> planAllMatches
-                    |> Async.RunSynchronously
-                    |> Seq.collect id
-                searchEvent.Trigger all_matches
-                do! loop ()
-            | Quit -> return ()
+            let! searchParams, replyChannel, ctx = inbox.Receive()
+            let cts = new CancellationTokenSource()
+            try
+                replyChannel.Reply(cts)
+                let results = Async.RunSynchronously ((planAllFilesMatches searchParams), -1, cts.Token)
+                do! Async.SwitchToContext ctx
+                searchEvent.Trigger results
+            with :? OperationCanceledException -> searchEvent.Trigger [||]
+            do! loop ()
+            // | Cancel ->
+            //     do! loop ()
+            // | Quit -> return ()
         }
         loop ())
 
