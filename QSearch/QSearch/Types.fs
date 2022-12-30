@@ -243,6 +243,11 @@ type FileSearchResult = {
 type FileSearchResultWithExn =
     | FileSearchResult of FileSearchResult
     | Exn of string
+    | NoMatches of string
+    with
+    static member accept = function
+        | FileSearchResult _ | Exn _ -> true
+        | NoMatches _ -> false
     
 module FileSearchResult =
     let create (fileContent: inref<FileContent>) {FileName=fileName; Matches=matches} =
@@ -251,7 +256,7 @@ module FileSearchResult =
                 fileLineResults.Add (createFileLineResult fileName &fileContent match_)
         let fileLineResults = fileLineResults.ToArray()
         let fileResult = {FileName=fileName; NumberOfMatches=Array.length fileLineResults}
-        {FileResult=fileResult; FileLineResults=fileLineResults}
+        FileSearchResult {FileResult=fileResult; FileLineResults=fileLineResults}
         
         
         

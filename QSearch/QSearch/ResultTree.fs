@@ -1,5 +1,6 @@
 ﻿module QSearch.ResultTree
 open Eto.Forms
+open QSearch.Types
 open Types
 open System
 
@@ -28,11 +29,13 @@ type ResultTree () as self =
             printfn $"{fileResult.FileName} ({fileResult.NumberOfMatches} matches)"
             self.create_item text children
         | Exn str -> self.create_item str []
+        | NoMatches fileName -> self.create_item fileName []
         
-    member self.populateTree (fileSearchResults: Choice<FileSearchResult, exn>[]) =
+    member self.populateTree (fileSearchResults: Choice<FileSearchResultWithExn, exn>[]) =
         treeResultsCollection.Clear()   
         fileSearchResults
         |> Array.map self.resultsToGridCollection
+        |> Array.filter FileSearchResultWithExn.accept
         |> Array.map self.fileItem
         //|> TreeGridItemCollection
         |> treeResultsCollection.AddRange
@@ -41,7 +44,11 @@ type ResultTree () as self =
         printfn $"count {treeResultsCollection.Count}"
         
     member self.resultsToGridCollection = function
-        | Choice1Of2 fsr -> FileSearchResult fsr
+        | Choice1Of2 fsrwe ->
+            match fsrwe with 
+            | FileSearchResult fsr -> FileSearchResult fsr
+            | Exn msg -> Exn msg
+            | NoMatches fileName -> NoMatches fileName
         | Choice2Of2 exn -> Exn exn.Message
         
     

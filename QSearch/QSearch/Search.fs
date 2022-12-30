@@ -35,8 +35,11 @@ let printTotalFileBytes path =
     
     
 let readFile (path:string) = async {
-  use sr = new StreamReader(path)
-  return! sr.ReadToEndAsync() |> Async.AwaitTask
+    try 
+        use sr = new StreamReader(path)
+        let! content = sr.ReadToEndAsync() |> Async.AwaitTask 
+        return Success(content)
+    with exn -> return Failure(exn.Message)
 }
 
 
@@ -44,13 +47,35 @@ let readFile (path:string) = async {
     Main search functions
 **********************************************************************************************************************)
 
+// let safeSeq x =
+//     try
+//         Success(x)
+//     with exn -> Failure exn.Message 
+//
+// let filesGenerator path pattern =
+//     fun () -> Directory.EnumerateFiles(path, pattern)
+//
+let enumerateFiles path pattern =
+    try
+        let files = Directory.EnumerateFiles(path, pattern)
+        seq { for file in files do yield Success file }
+    with exn -> seq { Failure exn.Message }  
+    
+let enumerateDirectories path =
+    try
+        let dirs = Directory.EnumerateDirectories(path)
+        seq { for dir in dirs do yield Success dir }
+    with exn -> seq { Failure exn.Message }        
+
 let rec getAllFilesByPatternList (paths: string[]) (patterns: string[]) (excludedDirs: string[]) = seq {
     for path in paths do
         for pattern in patterns do
-            yield! Directory.EnumerateFiles(path, pattern)
-        for dir in Directory.EnumerateDirectories(path) do
-            if excludedDirs |> Array.contains dir |> not then
-                yield! getAllFilesByPatternList [|dir|] patterns excludedDirs
+                yield! enumerateFiles path pattern 
+        for dir in enumerateDirectories(path) do
+            match dir with
+            | Success dir -> if excludedDirs |> Array.contains dir |> not then
+                                 yield! getAllFilesByPatternList [|dir|] patterns excludedDirs
+            | Failure msg -> Failure msg
 }   
 
 
@@ -64,13 +89,22 @@ let findMatchesInFile word (searchOptions: SearchOptions) (fileContent:string) =
 
 
 let planFileMatches searchParams fileName = async {
-    let! fileContent = readFile fileName
-    let matches = 
-        match String.IsNullOrEmpty searchParams.Word with
-        | false -> findMatchesInFile searchParams.Word searchParams.SearchOptions fileContent
-        | true -> Seq.empty
-    let fileContent = FileContent.create fileContent
-    return FileSearchResult.create &fileContent {FileName=fileName; Matches=matches} 
+    match fileName with
+    | Success fileName ->
+        let! fileContent = readFile fileName
+        match fileContent with
+        | Success fileContent -> 
+            let matches = 
+                match String.IsNullOrEmpty searchParams.Word with
+                | false -> findMatchesInFile searchParams.Word searchParams.SearchOptions fileContent
+                | true -> Seq.empty
+            if Seq.isEmpty matches |> not then
+                let fileContent = FileContent.create fileContent
+                return FileSearchResult.create &fileContent {FileName=fileName; Matches=matches}
+            else
+                return NoMatches fileName
+        | Failure msg -> return (Exn msg)
+    | Failure msg -> return (Exn msg)
     // return {FileName=fileName; Matches=matches}
 }
 
@@ -84,7 +118,7 @@ let planAllFilesMatches (searchParams: SearchParams) =
     |> Async.Parallel
     
 
-let searchEvent = Event<Choice<FileSearchResult, exn>[]>()
+let searchEvent = Event<Choice<FileSearchResultWithExn, exn>[]>()
 let searchFinished = searchEvent.Publish
 
 (*********************************************************************************************************************  
